@@ -1,0 +1,67 @@
+#Pulled fwd, rev and index files from basespace on illumina
+#If fwd and rev have barcodes, you'll want to use cutadapt. demux can only do single barcoded reads. 
+https://forum.qiime2.org/t/demultiplexing-and-trimming-adapters-from-reads-with-q2-cutadapt/2313
+
+#created folder named emp-paired-end-sequences
+#put the three renamed fastq.gz files into it
+
+#qiime2 was installed using conda. to access i use 
+conda info --envs
+conda activate qiime2-2022.2
+
+qiime tools import --type EMPPairedEndSequences --input-path ./emp-paired-end-sequences/ --output-path emp-paired-end-sequences.qza
+
+#the file list was created using the file names and barcodes and if it was done in excel in google sheets you can use the program keemei to output the appropriate file. 
+qiime demux emp-paired --i-seqs ./emp-paired-end-sequences.qza --m-barcodes-file Fn_demux_Mapping.txt --m-barcodes-column BarcodeSequence --o-per-sample-sequences demux --o-error-correction-details demux-details --p-rev-comp-mapping-barcodes 
+
+#using dada2 to remove noise and filter etc. 
+qiime dada2 denoise-paired --i-demultiplexed-seqs demux.qza --o-table table --o-denoising-stats dada2-stats --o-representative-sequences rep-seqs --p-trim-left-f 1 --p-trim-left-r 1 --p-trunc-len-f 240 --p-trunc-len-r 240 --p-max-ee-f 29 --p-max-ee-r 29
+
+qiime metadata tabulate --m-input-file rep-seqs.qza --o-visualization rep-seqs.qzv
+
+#getting those dada2 stats
+qiime metadata tabulate --m-input-file dada2-stats.qza --o-visualization dada2-stats.qzv
+
+#heres the metadata putting into the feature table. I went back on 4/30 and redid the meta with the data we decided upon.
+#this output file gives a lot of info for us.
+qiime feature-table summarize --i-table table.qza --o-visualization feature-table.qzv --m-sample-metadata-file FN_Meta.tsv 
+
+qiime phylogeny align-to-tree-mafft-fasttree --i-sequences rep-seqs.qza --o-alignment FN-aligned-rep-seqs.qza --o-masked-alignment FN-masked-aligned-rep-seqs.qza --o-tree unrooted-tree.qza --o-rooted-tree rooted-tree.qza
+
+#so the silva version i tried to use was apparently produced using an older sci-kit, so i went back to get the newest version from silva itself
+#got the new ones from here: https://github.com/qiime2/docs/blob/master/source/data-resources.rst
+
+qiime feature-classifier classify-sklearn --i-classifier silva-138-99-515-806-nb-classifier.qza --i-reads rep-seqs.qza --o-classification FN-taxonomy.qza
+
+qiime metadata tabulate --m-input-file FN-taxonomy.qza --o-visualization FN-taxonomy.qzv
+
+qiime taxa barplot --i-table table.qza --i-taxonomy FN-taxonomy.qza --m-metadata-file FN_Meta.tsv --o-visualization taxa-bar-plot.qzv
+
+#trying out diversity
+qiime diversity core-metrics-phylogenetic --i-phylogeny rooted-tree.qza --i-table table.qza --p-sampling-depth 10000 --m-metadata-file FN_Meta.tsv --output-dir ./core-metric-results
+
+qiime diversity alpha-group-significance --i-alpha-diversity ./core-metric-results/faith_pd_vector.qza --m-metadata-file FN_Meta.tsv --o-visualization ./core-metric-results/faith_pd_vector.qzv
+
+qiime diversity alpha-group-significance --i-alpha-diversity ./core-metric-results/evenness_vector.qza --m-metadata-file FN_Meta.tsv --o-visualization ./core-metric-results/evenness_vector.qzv
+
+qiime diversity alpha-group-significance --i-alpha-diversity ./core-metric-results/observed_features_vector.qza --m-metadata-file FN_Meta.tsv --o-visualization ./core-metric-results/observed_features_vector.qzv 
+
+qiime diversity beta-group-significance --i-distance-matrix ./core-metric-results/weighted_unifrac_distance_matrix.qza --m-metadata-file FN_Meta.tsv --m-metadata-column site --o-visualization ./core-metric-results/weighted_unifrac_distance_matrix.qzv
+
+#export biom file. table coming from initial dada2 analysis.
+qiime tools export --input-path ./table.qza --output-path ./biom
+
+#export taxonomy file
+qiime tools export --input-path ./FN-taxonomy.qza --output-path ./biom/
+
+#This imports it as a tsv but the header is wrong. it says Feature ID Taxon and Confidence.
+#so manually fix that to #OTUID taxonomy confidence
+#OR do this 
+"sed 's/Feature ID/#OTUID/' Phyloseq/taxonomy.tsv | sed 's/Taxon/taxonomy/' | sed 's/Confidence/confidence/' > Phyloseq/biom-taxonomy.tsv"
+
+#used this code below to make sure it looks okay and it does thankfully
+biom convert -i ./biom/feature-table.biom -o ./biom/feature-table.tsv --to-tsv
+
+#converting to an otu table?
+#dont needs to do this with qiimer
+biom convert -i ./biom/feature-table.biom -o feature-table.json.biom --to-json
